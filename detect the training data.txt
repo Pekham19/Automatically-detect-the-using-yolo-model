@@ -1,0 +1,540 @@
+
+import os
+from google.colab import drive
+drive.mount("/content/drive")
+DATASET_DIR = "/content/drive"
+dataset_structure = []
+dataset_scan_complete = False
+
+if os.path.isdir(DATASET_DIR):
+    for root, dirs, files in os.walk(DATASET_DIR):
+        level = root.replace(DATASET_DIR, "").count(os.sep)
+
+        if level <= 2:
+            dataset_structure.append({
+                "directory": root,
+                "subdirectories": dirs.copy(),
+                "files": files[:8]
+            })
+
+    dataset_scan_complete = True
+
+import os
+
+DATASET_DIR = "/content/drive/"
+
+dataset_exists = os.path.isdir(DATASET_DIR)
+file_count = 0
+
+if dataset_exists:
+    for root, dirs, files in os.walk(DATASET_DIR):
+        file_count += len(files)
+
+dataset_ready = dataset_exists and file_count > 0
+
+
+import os
+
+BASE_DIR = "/content/drive/MyDrive"
+
+print("Google Drive mounted:", os.path.isdir(BASE_DIR))
+
+print("\nFolders in MyDrive:")
+if os.path.isdir(BASE_DIR):
+    print(os.listdir(BASE_DIR)[:50])
+
+DATASET_DIR = os.path.join(
+    BASE_DIR, "folder_name", "folder_name"
+)
+
+print("\nDataset path:", DATASET_DIR)
+print("Dataset folder exists:", os.path.isdir(DATASET_DIR))
+
+if os.path.isdir(DATASET_DIR):
+    print("\nDataset contents:")
+    for root, dirs, files in os.walk(DATASET_DIR):
+        level = root.replace(DATASET_DIR, "").count(os.sep)
+        if level <= 2:
+            print("  " * level + os.path.basename(root) + "/")
+            for filename in files[:8]:
+                print("  " * (level + 1) + filename)
+        else:
+            dirs[:] = []
+
+import os
+import json
+import xml.etree.ElementTree as ET
+from PIL import Image
+DATASET_DIR = "/content/drive/"
+coco_dir = os.path.join(DATASET_DIR, "coco_style", "annotations")
+
+for filename in ["train.json", "test.json"]:
+    path = os.path.join(coco_dir, filename)
+
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        print(f"\n{filename}")
+        print("Images:", len(data.get("images", [])))
+        print("Annotations:", len(data.get("annotations", [])))
+        print("Categories:", data.get("categories", []))
+
+voc_dir = os.path.join(DATASET_DIR, "voc_style")
+xml_dir = os.path.join(voc_dir, "Annotations_train")
+train_images_dir = os.path.join(voc_dir, "JPEGImages_train")
+
+xml_files = [
+    f for f in os.listdir(xml_dir) if f.lower().endswith(".xml")
+] if os.path.isdir(xml_dir) else []
+
+print("\nVOC training XML files:", len(xml_files))
+if xml_files:
+    xml_path = os.path.join(xml_dir, xml_files[0])
+    root = ET.parse(xml_path).getroot()
+
+    print("\nExample annotation:", xml_files[0])
+
+    size = root.find("size")
+    if size is not None:
+        print("Image width:", size.findtext("width"))
+        print("Image height:", size.findtext("height"))
+
+    objects = root.findall("object")
+    print("Ships/objects in image:", len(objects))
+
+    for obj in objects[:5]:
+        box = obj.find("bndbox")
+        if box is not None:
+            print(
+                "Class:", obj.findtext("name"),
+                "Box:", {
+                    key: box.findtext(key)
+                    for key in ["xmin", "ymin", "xmax", "ymax"]
+                }
+            )
+
+if os.path.isdir(train_images_dir):
+    image_files = [
+        f for f in os.listdir(train_images_dir)
+        if f.lower().endswith((".jpg", ".jpeg", ".png"))
+    ]
+
+    print("\nVOC training images:", len(image_files))
+
+    if image_files:
+        image_path = os.path.join(train_images_dir, image_files[0])
+        with Image.open(image_path) as image:
+            print("Example image:", image_files[0])
+            print("Image dimensions:", image.size)
+
+
+
+import os
+import random
+import shutil
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from PIL import Image
+
+SOURCE = Path("/content/drive/")
+OUTPUT = Path("/content/")
+
+SEED = 42
+VAL_RATIO = 0.20
+
+random.seed(SEED)
+
+train_images_dir = SOURCE / "JPEGImages_train"
+train_xml_dir = SOURCE / "Annotations_train"
+
+test_images_dir = SOURCE / "JPEGImages_test"
+test_xml_dir = SOURCE / "Annotations_test"
+
+required_dirs = [
+    train_images_dir,
+    train_xml_dir,
+    test_images_dir,
+    test_xml_dir,
+]
+
+for folder in required_dirs:
+    if not folder.is_dir():
+        raise FileNotFoundError(f"Required directory not found: {folder}")
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
+
+def find_pairs(image_dir, xml_dir):
+    images = {
+        p.stem: p
+        for p in image_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+    }
+
+    annotations = {
+        p.stem: p
+        for p in xml_dir.iterdir()
+        if p.is_file() and p.suffix.lower() == ".xml"
+    }
+
+    common = sorted(set(images) & set(annotations))
+
+    unmatched_images = sorted(set(images) - set(annotations))
+    unmatched_xml = sorted(set(annotations) - set(images))
+
+    pairs = [(images[name], annotations[name]) for name in common]
+
+    return pairs, unmatched_images, unmatched_xml
+
+train_pairs, train_no_xml, train_no_image = find_pairs(
+    train_images_dir, train_xml_dir
+)
+
+test_pairs, test_no_xml, test_no_image = find_pairs(
+    test_images_dir, test_xml_dir
+)
+
+if not train_pairs:
+    raise RuntimeError("No matching training image/XML pairs found.")
+
+if not test_pairs:
+    raise RuntimeError("No matching test image/XML pairs found.")
+
+def convert_annotation(xml_path, image_path, label_path):
+    root = ET.parse(xml_path).getroot()
+
+    with Image.open(image_path) as im:
+        image_width, image_height = im.size
+
+    xml_size = root.find("size")
+
+    if xml_size is not None:
+        xml_width = int(xml_size.findtext("width", image_width))
+        xml_height = int(xml_size.findtext("height", image_height))
+    else:
+        xml_width, xml_height = image_width, image_height
+
+    if xml_width <= 0 or xml_height <= 0:
+        raise ValueError(f"Invalid XML image size: {xml_path}")
+
+    scale_x = image_width / xml_width
+    scale_y = image_height / xml_height
+
+    labels = []
+
+    for obj in root.findall("object"):
+        class_name = (obj.findtext("name") or "").strip().lower()
+
+        if class_name != "ship":
+            continue
+
+        box = obj.find("bndbox")
+        if box is None:
+            continue
+
+        xmin = float(box.findtext("xmin")) * scale_x
+        ymin = float(box.findtext("ymin")) * scale_y
+        xmax = float(box.findtext("xmax")) * scale_x
+        ymax = float(box.findtext("ymax")) * scale_y
+
+        xmin = max(0.0, min(xmin, image_width))
+        xmax = max(0.0, min(xmax, image_width))
+        ymin = max(0.0, min(ymin, image_height))
+        ymax = max(0.0, min(ymax, image_height))
+
+        if xmax <= xmin or ymax <= ymin:
+            continue
+
+        x_center = ((xmin + xmax) / 2.0) / image_width
+        y_center = ((ymin + ymax) / 2.0) / image_height
+        width = (xmax - xmin) / image_width
+        height = (ymax - ymin) / image_height
+
+        labels.append(
+            f"0 {x_center:.6f} {y_center:.6f} "
+            f"{width:.6f} {height:.6f}"
+        )
+
+    label_path.write_text(
+        "\n".join(labels) + ("\n" if labels else ""),
+        encoding="utf-8"
+    )
+
+    return len(labels)
+
+
+if OUTPUT.exists():
+    shutil.rmtree(OUTPUT)
+
+for split in ["train", "val", "test"]:
+    (OUTPUT / "images" / split).mkdir(parents=True, exist_ok=True)
+    (OUTPUT / "labels" / split).mkdir(parents=True, exist_ok=True)
+
+random.shuffle(train_pairs)
+
+val_count = max(1, round(len(train_pairs) * VAL_RATIO))
+
+val_pairs = train_pairs[:val_count]
+new_train_pairs = train_pairs[val_count:]
+
+splits = {
+    "train": new_train_pairs,
+    "val": val_pairs,
+    "test": test_pairs,
+}
+
+
+summary = {}
+
+for split, pairs in splits.items():
+    image_count = 0
+    ship_count = 0
+
+    for image_path, xml_path in pairs:
+        destination_image = (
+            OUTPUT / "images" / split / f"{image_path.stem}.jpg"
+        )
+        destination_label = (
+            OUTPUT / "labels" / split / f"{image_path.stem}.txt"
+        )
+
+        with Image.open(image_path) as im:
+            im.convert("RGB").save(destination_image, quality=95)
+
+        ship_count += convert_annotation(
+            xml_path, image_path, destination_label
+        )
+
+        image_count += 1
+
+    summary[split] = {
+        "images": image_count,
+        "ship_boxes": ship_count,
+    }
+
+yaml_text = f"""path: {OUTPUT}
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: ship
+"""
+
+(OUTPUT / "data.yaml").write_text(yaml_text, encoding="utf-8")
+
+
+
+for split in ["train", "val", "test"]:
+    image_dir = OUTPUT / "images" / split
+    label_dir = OUTPUT / "labels" / split
+
+    image_stems = {p.stem for p in image_dir.iterdir() if p.is_file()}
+    label_stems = {p.stem for p in label_dir.glob("*.txt")}
+
+    assert image_stems == label_stems, (
+        f"Image/label mismatch in {split}"
+    )
+
+print("Dataset conversion completed.")
+print("Output directory:", OUTPUT)
+print("YOLO configuration:", OUTPUT / "data.yaml")
+
+for split, stats in summary.items():
+    print(
+        f"{split.upper()}: "
+        f"{stats['images']} images, "
+        f"{stats['ship_boxes']} ship bounding boxes"
+    )
+
+print("\nUnmatched training images:", len(train_no_xml))
+print("Training XML files without images:", len(train_no_image))
+print("Unmatched test images:", len(test_no_xml))
+print("Test XML files without images:", len(test_no_image))
+print("\nClass mapping: 0 = ship")
+
+
+import os
+import random
+import shutil
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from PIL import Image
+
+SOURCE = Path(
+    "/content/drive/MyDrive/"
+)
+
+OUTPUT = Path(
+    "/content/drive/MyDrive/Galexyeye/"
+)
+
+SEED = 42
+VAL_RATIO = 0.20
+EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
+
+
+if not Path("/content/drive/MyDrive").is_dir():
+    from google.colab import drive
+    drive.mount("/content/drive")
+
+required = [
+    SOURCE / "JPEGImages_train",
+    SOURCE / "Annotations_train",
+    SOURCE / "JPEGImages_test",
+    SOURCE / "Annotations_test",
+]
+
+for folder in required:
+    if not folder.is_dir():
+        raise FileNotFoundError(f"Source folder missing: {folder}")
+
+
+def get_pairs(image_dir, xml_dir):
+    images = {
+        p.stem: p for p in image_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in EXTENSIONS
+    }
+    xmls = {
+        p.stem: p for p in xml_dir.glob("*.xml")
+    }
+    return [
+        (images[k], xmls[k])
+        for k in sorted(images.keys() & xmls.keys())
+    ]
+
+train_pairs = get_pairs(
+    SOURCE / "JPEGImages_train",
+    SOURCE / "Annotations_train"
+)
+
+test_pairs = get_pairs(
+    SOURCE / "JPEGImages_test",
+    SOURCE / "Annotations_test"
+)
+
+if not train_pairs or not test_pairs:
+    raise RuntimeError("No matched training or test image/annotation pairs.")
+
+
+random.seed(SEED)
+random.shuffle(train_pairs)
+
+val_count = max(1, round(len(train_pairs) * VAL_RATIO))
+val_pairs = train_pairs[:val_count]
+actual_train_pairs = train_pairs[val_count:]
+
+splits = {
+    "train": actual_train_pairs,
+    "val": val_pairs,
+    "test": test_pairs,
+}
+
+if OUTPUT.exists():
+    shutil.rmtree(OUTPUT)
+
+for split in splits:
+    (OUTPUT / "images" / split).mkdir(
+        parents=True, exist_ok=True
+    )
+    (OUTPUT / "labels" / split).mkdir(
+        parents=True, exist_ok=True
+    )
+
+def convert_xml(xml_path, image_path, label_path):
+    root = ET.parse(xml_path).getroot()
+
+    with Image.open(image_path) as im:
+        width, height = im.size
+
+    size = root.find("size")
+    xml_w = int(size.findtext("width", width)) if size is not None else width
+    xml_h = int(size.findtext("height", height)) if size is not None else height
+
+    if xml_w <= 0 or xml_h <= 0:
+        raise ValueError(f"Invalid dimensions in {xml_path}")
+
+    sx, sy = width / xml_w, height / xml_h
+    labels = []
+
+    for obj in root.findall("object"):
+        if (obj.findtext("name") or "").strip().lower() != "ship":
+            continue
+
+        box = obj.find("bndbox")
+        if box is None:
+            continue
+
+        xmin = float(box.findtext("xmin")) * sx
+        ymin = float(box.findtext("ymin")) * sy
+        xmax = float(box.findtext("xmax")) * sx
+        ymax = float(box.findtext("ymax")) * sy
+
+        xmin = max(0, min(xmin, width))
+        xmax = max(0, min(xmax, width))
+        ymin = max(0, min(ymin, height))
+        ymax = max(0, min(ymax, height))
+
+        if xmax <= xmin or ymax <= ymin:
+            continue
+
+        xc = ((xmin + xmax) / 2) / width
+        yc = ((ymin + ymax) / 2) / height
+        bw = (xmax - xmin) / width
+        bh = (ymax - ymin) / height
+
+        labels.append(
+            f"0 {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}"
+        )
+
+    label_path.write_text(
+        "\n".join(labels) + ("\n" if labels else ""),
+        encoding="utf-8"
+    )
+    return len(labels)
+
+
+for split, pairs in splits.items():
+    count_boxes = 0
+
+    for img_path, xml_path in pairs:
+        dst_img = OUTPUT / "images" / split / f"{img_path.stem}.jpg"
+        dst_lbl = OUTPUT / "labels" / split / f"{img_path.stem}.txt"
+
+        with Image.open(img_path) as im:
+            im.convert("RGB").save(dst_img, quality=95)
+
+        count_boxes += convert_xml(xml_path, img_path, dst_lbl)
+
+    print(
+        f"{split.upper()}: {len(pairs)} images, "
+        f"{count_boxes} ship boxes"
+    )
+
+yaml_path = OUTPUT / "data.yaml"
+
+yaml_path.write_text(
+    f"path: {OUTPUT}\n"
+    "train: images/train\n"
+    "val: images/val\n"
+    "test: images/test\n"
+    "names:\n"
+    "  0: ship\n",
+    encoding="utf-8"
+)
+
+assert yaml_path.is_file(), "Failed to create data.yaml"
+
+for split in splits:
+    images = list((OUTPUT / "images" / split).glob("*.jpg"))
+    labels = list((OUTPUT / "labels" / split).glob("*.txt"))
+
+    assert len(images) == len(labels), (
+        f"Image/label count mismatch in {split}"
+    )
+
+print("\nDataset rebuilt successfully.")
+print("Persistent configuration:", yaml_path)
+print("Configuration exists:", yaml_path.is_file())
+
