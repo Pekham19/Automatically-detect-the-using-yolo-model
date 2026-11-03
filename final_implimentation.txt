@@ -1,0 +1,425 @@
+!pip install -q ultralytics rasterio geopandas shapely opencv-python-headless
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os
+import glob
+import json
+import cv2
+import numpy as np
+import rasterio
+import matplotlib.pyplot as plt
+
+from rasterio.windows import Window
+from rasterio.transform import xy
+from ultralytics import YOLO
+from shapely.geometry import Polygon, mapping
+
+print("Environment ready.")
+
+
+import os
+from pathlib import Path
+from ultralytics import YOLO
+
+DRIVE_ROOT = Path("/content/drive/MyDrive")
+PROJECT_FOLDER = DRIVE_ROOT / "folder_name"
+
+MODEL_PATH = (
+    PROJECT_FOLDER
+    / "SAR_Ship_Detection"
+    / "ssdd_ship_detector"
+    / "weights"
+    / "best.pt"
+)
+
+SAR_PATH = PROJECT_FOLDER / "RAW_SAR_SEA_SMALL.tif"
+
+if not DRIVE_ROOT.exists():
+    raise FileNotFoundError(
+        "Google Drive is not mounted. Run this first:\n"
+        "from google.colab import drive\n"
+        "drive.mount('/content/drive')"
+    )
+
+print("Checking Singapore SAR raster...")
+
+if not SAR_PATH.is_file():
+    print("Exact path not found:", SAR_PATH)
+    print("\nFiles currently in the Galexyeye folder:")
+
+    if PROJECT_FOLDER.exists():
+        for item in PROJECT_FOLDER.iterdir():
+            print(" -", item.name)
+
+    raise FileNotFoundError(
+        "RAW_SAR_SEA_SMALL.tif was not found at the expected path. "
+        "Check the printed filenames for spelling or extension differences."
+    )
+
+print("SAR raster found:", SAR_PATH)
+print("File size: {:.2f} MB".format(
+    SAR_PATH.stat().st_size / (1024 ** 2)
+))
+
+print("\nChecking trained YOLO model...")
+
+if not MODEL_PATH.is_file():
+    print("Expected model path not found:", MODEL_PATH)
+
+    alternatives = list(PROJECT_FOLDER.rglob("best.pt"))
+
+    if alternatives:
+        print("\nAvailable best.pt files:")
+        for i, path in enumerate(alternatives):
+            print(f"[{i}] {path}")
+
+        MODEL_PATH = alternatives[0]
+    else:
+        raise FileNotFoundError(
+            "best.pt was not found. Check your training output "
+            "and the SAR_Ship_Detection folder."
+        )
+
+print("Model found:", MODEL_PATH)
+
+model = YOLO(str(MODEL_PATH))
+
+print("\nSUCCESS: Ready for SAR ship detection.")
+print("SAR image :", SAR_PATH)
+print("YOLO model:", MODEL_PATH)
+print("Model classes:", model.names)
+
+
+from pathlib import Path
+import numpy as np
+import rasterio
+import matplotlib.pyplot as plt
+
+SAR_PATH = Path(
+    "/content/drive/MyDrive/folder_name/RAW_SAR_SEA_SMALL.tif"
+)
+
+if not Path("/content/drive/MyDrive").exists():
+    from google.colab import drive
+    drive.mount("/content/drive")
+
+if not SAR_PATH.is_file():
+    raise FileNotFoundError(
+        f"SAR raster not found: {SAR_PATH}\n"
+        "Check that the file exists in your Google Drive."
+    )
+
+print("SAR raster found:", SAR_PATH)
+
+
+with rasterio.open(str(SAR_PATH)) as src:
+    raw = src.read(1)
+
+    print("\nRaster information")
+    print("Dimensions:", src.width, "x", src.height)
+    print("Data type:", raw.dtype)
+    print("CRS:", src.crs)
+    print("NoData:", src.nodata)
+    print("Scale:", src.scales)
+    print("Offset:", src.offsets)
+    print("Mask flags:", src.mask_flag_enums)
+
+
+raw_float = raw.astype(np.float64)
+valid_mask = np.isfinite(raw_float)
+valid = raw_float[valid_mask]
+
+print("\nPixel diagnostics")
+print("Total pixels:", raw.size)
+print("Finite pixels:", valid.size)
+print("NaN pixels:", np.isnan(raw_float).sum())
+print("Infinite pixels:", np.isinf(raw_float).sum())
+
+
+if valid.size == 0:
+    print(
+        "\nERROR: No finite pixel values exist in this raster. "
+        "The image must be re-exported or downloaded again."
+    )
+else:
+    low, high = np.percentile(valid, [2, 98])
+
+    print("Minimum:", float(valid.min()))
+    print("Maximum:", float(valid.max()))
+    print("2nd percentile:", float(low))
+    print("98th percentile:", float(high))
+
+    if high <= low:
+        print(
+            "\nERROR: The raster has no usable contrast. "
+            "Check the source file and its band values."
+        )
+    else:
+        display = np.zeros(raw.shape, dtype=np.float32)
+        display[valid_mask] = np.clip(
+            (raw_float[valid_mask] - low) / (high - low),
+            0, 1
+        )
+
+        plt.figure(figsize=(12, 8))
+        plt.imshow(display, cmap="gray", vmin=0, vmax=1)
+        plt.title("Singapore SAR — diagnostic display")
+        plt.axis("off")
+        plt.show()
+
+
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import pandas as pd
+
+h, w = gray.shape
+land_mask = np.zeros((h, w), dtype=np.uint8)
+
+def poly(points):
+    """Normalized coordinates (0-1) to raster pixel coordinates."""
+    return np.array(
+        [[round(x * w), round(y * h)] for x, y in points],
+        dtype=np.int32
+    )
+
+# ---------------------------------------------------------
+# FOUR LAND EXCLUSION POLYGONS FROM YOUR BLUE OUTLINES
+# ---------------------------------------------------------
+
+# A. Upper-left coastline
+upper_left = poly([
+    (0.00, 0.00),
+    (0.33, 0.00),
+    (0.28, 0.035),
+    (0.23, 0.055),
+    (0.18, 0.075),
+    (0.15, 0.105),
+    (0.145, 0.145),
+    (0.12, 0.165),
+    (0.10, 0.205),
+    (0.00, 0.255)
+])
+
+# B. Left-edge land patch
+left_patch = poly([
+    (0.00, 0.395),
+    (0.055, 0.395),
+    (0.085, 0.415),
+    (0.105, 0.455),
+    (0.105, 0.515),
+    (0.09, 0.565),
+    (0.055, 0.595),
+    (0.00, 0.595)
+])
+
+# C. Bottom-left island group
+bottom_left = poly([
+    (0.00, 0.91),
+    (0.025, 0.855),
+    (0.065, 0.815),
+    (0.105, 0.785),
+    (0.155, 0.775),
+    (0.205, 0.795),
+    (0.255, 0.845),
+    (0.285, 0.90),
+    (0.295, 1.00),
+    (0.00, 1.00)
+])
+
+# D. Large bottom-right island/coastline
+bottom_right = poly([
+    (0.715, 1.00),
+    (0.715, 0.935),
+    (0.705, 0.895),
+    (0.72, 0.855),
+    (0.735, 0.82),
+    (0.745, 0.775),
+    (0.77, 0.735),
+    (0.795, 0.705),
+    (0.835, 0.685),
+    (0.875, 0.69),
+    (0.915, 0.715),
+    (0.955, 0.755),
+    (1.00, 0.805),
+    (1.00, 1.00)
+])
+
+for p in [upper_left, left_patch, bottom_left, bottom_right]:
+    cv2.fillPoly(land_mask, [p], 1)
+
+# ---------------------------------------------------------
+# PREVIEW MASK BEFORE FILTERING
+# Orange is excluded. Black is retained water.
+# ---------------------------------------------------------
+plt.figure(figsize=(13, 8))
+plt.imshow(gray, cmap="gray")
+plt.imshow(
+    np.ma.masked_where(land_mask == 0, land_mask),
+    cmap="autumn",
+    alpha=0.50
+)
+plt.title("Updated land mask — compare with blue outlines")
+plt.axis("off")
+plt.show()
+
+# ---------------------------------------------------------
+# 4. FILTER EXISTING DETECTIONS
+# Remove a box if its centre is on land OR most of its
+# area overlaps the land mask.
+# ---------------------------------------------------------
+kept_boxes = []
+kept_scores = []
+removed_boxes = []
+
+for box, score in zip(final_boxes, final_scores):
+    x1, y1, x2, y2 = map(float, box)
+
+    ix1 = max(0, int(np.floor(x1)))
+    iy1 = max(0, int(np.floor(y1)))
+    ix2 = min(w, int(np.ceil(x2)))
+    iy2 = min(h, int(np.ceil(y2)))
+
+    if ix2 <= ix1 or iy2 <= iy1:
+        continue
+
+    cx = min(w - 1, max(0, int((x1 + x2) / 2)))
+    cy = min(h - 1, max(0, int((y1 + y2) / 2)))
+
+    patch = land_mask[iy1:iy2, ix1:ix2]
+    land_fraction = float(patch.mean()) if patch.size else 0.0
+
+    if land_mask[cy, cx] == 1 or land_fraction > 0.20:
+        removed_boxes.append(box)
+    else:
+        kept_boxes.append(box)
+        kept_scores.append(float(score))
+
+kept_boxes = np.asarray(kept_boxes, dtype=np.float32).reshape(-1, 4)
+kept_scores = np.asarray(kept_scores, dtype=np.float32)
+
+print("Before masking:", len(final_boxes))
+print("Removed over masked land:", len(removed_boxes))
+print("Retained candidates:", len(kept_boxes))
+
+
+overlay = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+for box, score in zip(kept_boxes, kept_scores):
+    x1, y1, x2, y2 = np.round(box).astype(int)
+
+    cv2.rectangle(
+        overlay, (x1, y1), (x2, y2), (0, 255, 0), 2
+    )
+    cv2.putText(
+        overlay,
+        f"Ship {score:.2f}",
+        (x1, max(14, y1 - 4)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.42,
+        (0, 255, 0),
+        1,
+        cv2.LINE_AA
+    )
+
+OUT = Path(
+    "/content/drive/MyDrive/folder name/"
+    "SAR_Ship_Detection/Singapore_Inference"
+)
+OUT.mkdir(parents=True, exist_ok=True)
+
+out_png = OUT / "Singapore_Detections_FourLandMasks.png"
+
+plt.figure(figsize=(15, 10))
+plt.imshow(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
+plt.title(f"Ship candidates after four land masks: {len(kept_boxes)}")
+plt.axis("off")
+plt.savefig(out_png, dpi=200, bbox_inches="tight")
+plt.show()
+
+pd.DataFrame({
+    "candidate_id": np.arange(1, len(kept_boxes) + 1),
+    "confidence": kept_scores,
+    "xmin_pixel": kept_boxes[:, 0],
+    "ymin_pixel": kept_boxes[:, 1],
+    "xmax_pixel": kept_boxes[:, 2],
+    "ymax_pixel": kept_boxes[:, 3]
+}).to_csv(OUT / "Singapore_Detections_FourLandMasks.csv", index=False)
+
+print("Saved:", out_png)
+
+
+import json
+import pandas as pd
+from pathlib import Path
+from ultralytics import YOLO
+
+PROJECT = Path("/content/drive/MyDrive/folder_name")
+
+MODEL_PATH = (
+    PROJECT / "SAR_Ship_Detection" /
+    "ssdd_ship_detector" / "weights" / "best.pt"
+)
+DATA_YAML = PROJECT / "ssdd_yolo" / "data.yaml"
+
+OUTPUT_DIR = (
+    PROJECT / "SAR_Ship_Detection" / "validation_evaluation"
+)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+model = YOLO(str(MODEL_PATH))
+
+# Evaluate the validation split, not the test split.
+metrics = model.val(
+    data=str(DATA_YAML),
+    split="val",
+    imgsz=640,
+    batch=8,
+    conf=0.001,
+    iou=0.6,
+    plots=True,
+    project=str(OUTPUT_DIR),
+    name="ssdd_validation",
+    exist_ok=True,
+    verbose=True
+)
+
+precision = float(metrics.box.mp)
+recall = float(metrics.box.mr)
+map50 = float(metrics.box.map50)
+map50_95 = float(metrics.box.map)
+
+f1 = (
+    2 * precision * recall / (precision + recall)
+    if precision + recall > 0 else 0.0
+)
+
+rows = [
+    {"dataset": "SSDD", "split": "validation",
+     "metric": "Precision", "value": precision},
+    {"dataset": "SSDD", "split": "validation",
+     "metric": "Recall", "value": recall},
+    {"dataset": "SSDD", "split": "validation",
+     "metric": "F1-score", "value": f1},
+    {"dataset": "SSDD", "split": "validation",
+     "metric": "mAP@0.50", "value": map50},
+    {"dataset": "SSDD", "split": "validation",
+     "metric": "mAP@0.50:0.95", "value": map50_95}
+]
+
+df = pd.DataFrame(rows)
+csv_path = OUTPUT_DIR / "validation_metrics.csv"
+json_path = OUTPUT_DIR / "validation_metrics.json"
+
+df.to_csv(csv_path, index=False)
+with open(json_path, "w") as f:
+    json.dump(rows, f, indent=2)
+
+print("\nVALIDATION METRICS")
+print(df.to_string(index=False))
+print("\nCSV:", csv_path)
+print("JSON:", json_path)
+print("Evaluation plots:", metrics.save_dir)
